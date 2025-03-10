@@ -188,13 +188,13 @@ class DataLoader(object):
         """ Resize and scale image"""
 
         # Crop
-        if self.d_transforms['crop'] is not None:
-            (x1, y1, x2, y2) = self.d_transforms['crop']
-            image = tf.image.crop_to_bounding_box(image, y1, x1, y2-y1, x2-x1)
+        # if self.d_transforms['crop'] is not None:
+        #     (x1, y1, x2, y2) = self.d_transforms['crop']
+        #     image = tf.image.crop_to_bounding_box(image, y1, x1, y2-y1, x2-x1)
 
-            if mask is not None:
-                mask = tf.image.crop_to_bounding_box(
-                    mask, y1, x1, y2-y1, x2-x1)
+        #     if mask is not None:
+        #         mask = tf.image.crop_to_bounding_box(
+        #             mask, y1, x1, y2-y1, x2-x1)
 
         # Resize
         if self.d_transforms['resize'] is not None:
