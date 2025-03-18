@@ -1,3 +1,5 @@
 __pycache__/
 data/
 lus_venv/
+screen*
+outputs/

@@ -1,3 +1,5 @@
+import os
+os.environ['TF_CPP_MIN_LOG_LEVEL'] = '3'
 import rclpy
 from rclpy.node import Node
 from sensor_msgs.msg import CompressedImage
@@ -10,7 +12,8 @@ import pandas as pd
 from src import Models as models
 from src.DataLoader import DataLoader
 from src import Visualise as vis
-
+import copy
+import datetime
 # MODEL PARAMETERS
 CLASS_NAMES = ['Ribs', 'Pleural line', 'A-line', 'B-line', 'B-line confluence']
 # CLASS_NAMES = ['Ribs', 'Pleural line', 'A-line', 'B-line', 'B-line confluence']
@@ -21,13 +24,12 @@ CMAP = vis.plt.cm.tab10.colors
 class UltrasoundSegmentationNode(Node):
     def __init__(self):
         super().__init__('ultrasound_segmentation')
-        self.subscription = self.create_subscription(
-            CompressedImage,
-            '/screen',  # Change this topic name as needed
-            self.image_callback,
-            10
-        )
-        self.subscription  # Prevent unused variable warning
+        # makedir
+        folder_name = "detections_" + datetime.datetime.now().strftime("%Y%m%d-%H%M%S")
+        os.makedirs("outputs/" + folder_name)
+        self.base_path = "outputs/" + folder_name
+        print("Saving detections of pleura to: ", self.base_path)
+        self.result_idx = 0
         self.bridge = CvBridge()
 
         # Load model
@@ -39,7 +41,7 @@ class UltrasoundSegmentationNode(Node):
             'one-hot': True,
         })
         self.overlay = True
-        self.overlay_transparency = 0.5
+        self.overlay_transparency = 0.7
         self.d_times = {'preprocessing': [], 'inference': [], 'display': [], 'total': []}
 
         # Define visualization windows
@@ -50,39 +52,46 @@ class UltrasoundSegmentationNode(Node):
         legend = vis.create_cv2_legend(CLASSES.values(), cmap=[tuple(int(i*255) for i in c) for c in CMAP])
         cv2.imshow("Legend", legend)
 
+        self.subscription = self.create_subscription(
+            CompressedImage,
+            '/screen',  # Change this topic name as needed
+            self.image_callback,
+            1
+        )
+
     def image_callback2(self, msg):
         self.get_logger().info('Received image')
 
         # Convert compressed image to OpenCV format
-        np_arr = np.frombuffer(msg.data, np.uint8)
-        image = cv2.imdecode(np_arr, cv2.IMREAD_COLOR)
-        # Crop image (adjust as needed)
-        (x1, y1, x2, y2) = (27, 41, 200, 330)
-        image = image[y1:y2, x1:x2]
+        # np_arr = np.frombuffer(msg.data, np.uint8)
+        # image = cv2.imdecode(np_arr, cv2.IMREAD_COLOR)
+        # # Crop image (adjust as needed)
+        # (x1, y1, x2, y2) = (27, 41, 200, 330)
+        # image = image[y1:y2, x1:x2]
 
-        # Convert to Grayscale & Denoise
-        gray = cv2.cvtColor(image, cv2.COLOR_BGR2GRAY)
-        blurred = cv2.GaussianBlur(gray, (5, 5), 0)
+        # # Convert to Grayscale & Denoise
+        # gray = cv2.cvtColor(image, cv2.COLOR_BGR2GRAY)
+        # blurred = cv2.GaussianBlur(gray, (5, 5), 0)
 
-        # Enhance Contrast
-        clahe = cv2.createCLAHE(clipLimit=2.0, tileGridSize=(8,8))
-        contrast_enhanced = clahe.apply(blurred)
+        # # Enhance Contrast
+        # clahe = cv2.createCLAHE(clipLimit=2.0, tileGridSize=(8,8))
+        # contrast_enhanced = clahe.apply(blurred)
 
-        # Thresholding (Highlight Brightest Regions)
-        _, thresh = cv2.threshold(contrast_enhanced, 100, 255, cv2.THRESH_BINARY)
-        cv2.imshow("Thresholded", thresh)
+        # # Thresholding (Highlight Brightest Regions)
+        # _, thresh = cv2.threshold(contrast_enhanced, 100, 255, cv2.THRESH_BINARY)
+        # cv2.imshow("Thresholded", thresh)
 
-        # Morphological Closing with Small Kernel (To avoid over-connection)
-        kernel = np.ones((3,3), np.uint8)  # Smaller kernel to keep horizontal details
-        closed = cv2.morphologyEx(thresh, cv2.MORPH_CLOSE, kernel)
+        # # Morphological Closing with Small Kernel (To avoid over-connection)
+        # kernel = np.ones((3,3), np.uint8)  # Smaller kernel to keep horizontal details
+        # closed = cv2.morphologyEx(thresh, cv2.MORPH_CLOSE, kernel)
 
-        # Detect Edges
-        edges = cv2.Canny(closed, 50, 150)
+        # # Detect Edges
+        # edges = cv2.Canny(closed, 50, 150)
 
-        # Find Contours
-        contours, _ = cv2.findContours(edges, cv2.RETR_EXTERNAL, cv2.CHAIN_APPROX_SIMPLE)
-        cv2.drawContours(image, contours, -1, (0, 255, 0), 1)
-        cv2.imshow("Contours", image)   
+        # # Find Contours
+        # contours, _ = cv2.findContours(edges, cv2.RETR_EXTERNAL, cv2.CHAIN_APPROX_SIMPLE)
+        # cv2.drawContours(image, contours, -1, (0, 255, 0), 1)
+        # cv2.imshow("Contours", image)   
 
         # Define a minimum contour area threshold
         # MIN_CONTOUR_AREA = 250  # Adjust as needed
@@ -127,21 +136,49 @@ class UltrasoundSegmentationNode(Node):
         cv2.waitKey(1)
             # cv2.destroyAllWindows()
             # cv2.destroyAllWindows()
-
-    def get_biggest_component(self, mask):
+   
+    def get_biggest_component(self, mask, img):
+        # Ensure mask and img are the same size
+        mask = cv2.resize(mask, (img.shape[1], img.shape[0]), interpolation=cv2.INTER_NEAREST)
 
         # Find all connected components
         _, labels, stats, _ = cv2.connectedComponentsWithStats(mask, connectivity=8)
 
+        detection = copy.deepcopy(img)
+        result = False
+        
         if stats.shape[0] == 1:
-            return mask
+            return mask, detection, result
+
         # Find the largest component (excluding background)
         largest_label = 1 + np.argmax(stats[1:, cv2.CC_STAT_AREA])  # Skip the background label
+        num_pixel = stats[largest_label, cv2.CC_STAT_AREA]
+
+
+        if num_pixel > 3000 and num_pixel < 10000:
+            print("Go to the next area: ", num_pixel)
+
+            # Bounding box of the largest component
+            x = stats[largest_label, cv2.CC_STAT_LEFT]
+            y = stats[largest_label, cv2.CC_STAT_TOP]
+            w = stats[largest_label, cv2.CC_STAT_WIDTH]
+            h = stats[largest_label, cv2.CC_STAT_HEIGHT]
+
+            # Convert coordinates to match the original image
+            center_x = x + w // 2
+            center_y = y + h // 2
+            axes_x = w // 2
+            axes_y = h // 2
+
+            # Draw the red ellipse
+            cv2.ellipse(detection, (center_x, center_y), (axes_x, axes_y), angle=0, 
+                        startAngle=0, endAngle=360, color=(0, 0, 255), thickness=2)
+            result = True
 
         # Create a new mask with only the largest component
         largest_mask = (labels == largest_label).astype(np.uint8)
-    
-        return largest_mask
+
+        return largest_mask, detection, result
 
 
     def image_callback(self, msg):
@@ -151,12 +188,20 @@ class UltrasoundSegmentationNode(Node):
         # Convert compressed image to OpenCV format
         np_arr = np.frombuffer(msg.data, np.uint8)
         frame = cv2.imdecode(np_arr, cv2.IMREAD_COLOR)
+
+        # mask the green dot
         frame[77:92,111:130][:] = 0
+
         # cv2.imshow('Original', frame)
-        # cv2.waitKey(1)
+        # cv2.waitKey(0)
+        
         #crop image
         # (x1,y1,x2,y2) = (26,77,450,734)
+        
         (x1,y1,x2,y2) = (26,77,450,500)
+        # (x1,y1,x2,y2) = (26,127,450,500)
+        
+        
         # (x1,y1,x2,y2) = (27, 41, 200, 330)
         frame = frame[y1:y2, x1:x2]
 
@@ -176,9 +221,9 @@ class UltrasoundSegmentationNode(Node):
         frame = tf.convert_to_tensor(frame)[tf.newaxis, :, :, tf.newaxis]
         frame = self.dl.resize_and_rescale(frame)
 
-        frame_cv = frame.numpy().squeeze()
-        frame_cv = cv2.cvtColor(frame_cv, cv2.COLOR_GRAY2BGR)
-
+        # frame_cv = copy.deepcopy(frame)
+        # frame_cv = frame_cv.numpy().squeeze()
+        # frame_cv = cv2.cvtColor(frame_cv, cv2.COLOR_GRAY2BGR)
         # cv2.imshow('Preprocessed', frame_cv)
         # cv2.waitKey(1)
 
@@ -189,13 +234,24 @@ class UltrasoundSegmentationNode(Node):
         
         # convert from 1-hot encoded to 2d array
         pred_mask = pred_mask_prob[:,:,3] #  pred_mask_prob.argmax(axis=2)
+
+        # draw the mask
+        pred_mask[0:50,:] = 0
+        # cv2.imshow('Mask', pred_mask * 255)
+        # cv2.waitKey(0)
+        pred_mask[250:,:] = 0
+
+
+        # cover the starting area
         pred_mask = pred_mask > 0.005
 
         bool_mask = pred_mask.astype(np.uint8)
         # get the biggest mask from the prediction
-        pred_mask = self.get_biggest_component(bool_mask)
-        cv2.imshow('Biggest Mask', pred_mask * 255)
-        cv2.waitKey(1)
+        frame_vis = frame0 / 255
+        pred_mask, detection, result = self.get_biggest_component(bool_mask, frame_vis)
+        pred_mask_cv = copy.deepcopy(pred_mask) * 255
+        # cv2.imshow('Biggest Mask', pred_mask * 255)
+        # cv2.waitKey(1)
 
         pred_mask = vis.seg_to_rgb(pred_mask, cm=CMAP)
         pred_mask = cv2.resize(pred_mask.astype('float32'), (frame0.shape[1], frame0.shape[0]), interpolation=cv2.INTER_AREA)
@@ -203,19 +259,34 @@ class UltrasoundSegmentationNode(Node):
         # Overlay mask
         if self.overlay:
             pred_mask = cv2.cvtColor(pred_mask, cv2.COLOR_RGB2BGR)
-            frame = cv2.addWeighted(frame0 / 255, 1.0, pred_mask, self.overlay_transparency, 0, dtype=cv2.CV_32F)
+            frame_vis = cv2.addWeighted(frame0 / 255, 1.0, pred_mask, self.overlay_transparency, 0, dtype=cv2.CV_32F)
 
         t2 = perf_counter()
 
         # Display output
-        cv2.imshow('Model output', frame)
-        key = cv2.waitKey(1)
-        # if key == ord('q'):
-        #     rclpy.shutdown()
-        # elif key == ord('w'):
-        #     self.overlay_transparency = min(self.overlay_transparency + 0.1, 1.0)
-        # elif key == ord('s'):
-        #     self.overlay_transparency = max(self.overlay_transparency - 0.1, 0.0)
+        cv2.imshow('Model output', frame_vis)
+        cv2.waitKey(1)
+
+        if result:
+            cv2.imshow('Detection', detection)
+            # dump results
+            print("Dumping results")
+            # detection = cv2.cvtColor(detection, cv2.COLOR_BGR2RGB)
+            # pred_mask = cv2.cvtColor(pred_mask, cv2.COLOR_BGR2RGB)
+            # frame0 = cv2.cvtColor(frame0, cv2.COLOR_BGR2RGB)
+            # frame_vis = cv2.cvtColor(frame_vis, cv2.COLOR_BGR2RGB)
+            # cv2.imwrite(self.base_path + '/mask.png', pred_mask)
+            # cv2.imwrite(self.base_path + '/frame.png', frame0)
+
+            # move to cpu
+            frame_vis = frame_vis * 255
+            detection = detection * 255
+            cv2.imwrite(self.base_path + '/frame_vis_' + str(self.result_idx) + '.png', frame_vis)
+            cv2.imwrite(self.base_path + '/detection.png', detection)
+            cv2.imwrite(self.base_path + '/frame.png', frame0)
+            cv2.imwrite(self.base_path + '/mask.png', pred_mask_cv)
+            self.result_idx += 1
+            cv2.waitKey(1)
 
         self.d_times['preprocessing'].append(t1-t0)
         self.d_times['inference'].append(t2-t1)
