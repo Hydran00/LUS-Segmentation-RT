@@ -14,6 +14,7 @@ from src.DataLoader import DataLoader
 from src import Visualise as vis
 import copy
 import datetime
+import argparse
 # MODEL PARAMETERS
 CLASS_NAMES = ['Ribs', 'Pleural line', 'A-line', 'B-line', 'B-line confluence']
 # CLASS_NAMES = ['Ribs', 'Pleural line', 'A-line', 'B-line', 'B-line confluence']
@@ -22,13 +23,13 @@ CLASSES = {i+1: CLASS_NAMES[i] for i in range(len(CLASS_NAMES))}  # map indices 
 CMAP = vis.plt.cm.tab10.colors
 
 class UltrasoundSegmentationNode(Node):
-    def __init__(self):
+    def __init__(self, output_folder):
         super().__init__('ultrasound_segmentation')
         # makedir
-        folder_name = "detections_" + datetime.datetime.now().strftime("%Y%m%d-%H%M%S")
-        os.makedirs("outputs/" + folder_name)
-        self.base_path = "outputs/" + folder_name
-        print("Saving detections of pleura to: ", self.base_path)
+        self.output_path = output_folder
+        os.makedirs(self.output_path, exist_ok=True)
+        self.base_path = self.output_path 
+        print("\033[92m Output folder: ", self.base_path, "\033[0m")
         self.result_idx = 0
         self.bridge = CvBridge()
 
@@ -264,34 +265,35 @@ class UltrasoundSegmentationNode(Node):
         t2 = perf_counter()
 
         # Display output
-        cv2.imshow('Model output', frame_vis)
-        cv2.waitKey(1)
 
         if result:
-            cv2.imshow('Detection', detection)
+            # draw the ellipsis to the frame
+            cv2.imshow('Model output', detection)
+            cv2.waitKey(2000)
+        else:
+            cv2.imshow('Model output', frame_vis)
+            cv2.waitKey(1)
+    
+        if result:
+            # cv2.imshow('Detection', detection)
             # dump results
             print("Dumping results")
-            # detection = cv2.cvtColor(detection, cv2.COLOR_BGR2RGB)
-            # pred_mask = cv2.cvtColor(pred_mask, cv2.COLOR_BGR2RGB)
-            # frame0 = cv2.cvtColor(frame0, cv2.COLOR_BGR2RGB)
-            # frame_vis = cv2.cvtColor(frame_vis, cv2.COLOR_BGR2RGB)
-            # cv2.imwrite(self.base_path + '/mask.png', pred_mask)
-            # cv2.imwrite(self.base_path + '/frame.png', frame0)
-
             # move to cpu
             frame_vis = frame_vis * 255
             detection = detection * 255
             cv2.imwrite(self.base_path + '/frame_vis_' + str(self.result_idx) + '.png', frame_vis)
-            cv2.imwrite(self.base_path + '/detection.png', detection)
-            cv2.imwrite(self.base_path + '/frame.png', frame0)
-            cv2.imwrite(self.base_path + '/mask.png', pred_mask_cv)
+            cv2.imwrite(self.base_path + '/detection_' + str(self.result_idx) + '.png', detection)
+            cv2.imwrite(self.base_path + '/frame_' + str(self.result_idx) + '.png', frame0)
+            cv2.imwrite(self.base_path + '/mask_' + str(self.result_idx) + '.png', pred_mask_cv)
             self.result_idx += 1
-            cv2.waitKey(1)
+            cv2.waitKey(1000)
+        
 
-        self.d_times['preprocessing'].append(t1-t0)
-        self.d_times['inference'].append(t2-t1)
-        self.d_times['display'].append(perf_counter()-t2)
-        self.d_times['total'].append(perf_counter()-t0)
+
+        # self.d_times['preprocessing'].append(t1-t0)
+        # self.d_times['inference'].append(t2-t1)
+        # self.d_times['display'].append(perf_counter()-t2)
+        # self.d_times['total'].append(perf_counter()-t0)
 
     def click_event(self, event, x, y, flags, param):
         if event == cv2.EVENT_LBUTTONDOWN:
@@ -304,8 +306,13 @@ class UltrasoundSegmentationNode(Node):
 
 
 def main(args=None):
-    rclpy.init(args=args)
-    node = UltrasoundSegmentationNode()
+    # parse arguments
+    parser = argparse.ArgumentParser(description='Ultrasound Segmentation')
+    parser.add_argument('--output_folder', type=str, default=os.path.expanduser("~") + "/temp/us_images/", help='Output folder')
+    args = parser.parse_args()
+    output_folder = args.output_folder
+    rclpy.init(args=None)
+    node = UltrasoundSegmentationNode(output_folder)
     rclpy.spin(node)
     node.save_timing_performance()
     node.destroy_node()
